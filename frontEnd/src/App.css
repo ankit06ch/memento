@@ -27,6 +27,7 @@
   left: 50%;
   transform: translate(-50%, -50%);
   object-fit: cover;
+  z-index: 0;
 }
 
 /* Overlay for better text readability */
@@ -37,7 +38,37 @@
   left: 0;
   width: 100%;
   height: 100%;
-  background: rgba(0, 0, 0, 0.3);
+  background: linear-gradient(
+    to bottom,
+    rgba(0, 0, 0, 0.15) 0%,
+    rgba(0, 0, 0, 0.2) 20%,
+    rgba(0, 0, 0, 0.25) 40%,
+    rgba(0, 0, 0, 0.3) 100%
+  );
+  z-index: 1;
+  pointer-events: none;
+}
+
+/* White gradient overlay at top for logo visibility */
+.video-container::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 40vh;
+  background: linear-gradient(
+    to bottom,
+    rgba(255, 255, 255, 0.4) 0%,
+    rgba(255, 255, 255, 0.25) 15%,
+    rgba(255, 255, 255, 0.15) 30%,
+    rgba(255, 255, 255, 0.08) 50%,
+    rgba(255, 255, 255, 0.03) 70%,
+    transparent 100%
+  );
+  pointer-events: none;
+  z-index: 2;
+  transition: opacity 0.5s ease;
 }
 
 /* Sidebar */
@@ -107,7 +138,7 @@
 /* Header */
 .header {
   position: relative;
-  z-index: 10;
+  z-index: 1002;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -124,13 +155,13 @@
 }
 
 .app-title {
-  font-size: 4.5rem;
-  font-weight: 700;
-  color: white;
+  height: auto;
+  max-width: 300px;
+  width: auto;
   margin: 0;
   margin-top: 1rem;
-  letter-spacing: 0.05em;
-  font-family: 'Forum', serif;
+  object-fit: contain;
+  display: block;
 }
 
 .icon-button {
@@ -446,6 +477,7 @@
   pointer-events: none;
 }
 
+
 .date-slider:active {
   cursor: grabbing;
 }
@@ -673,7 +705,7 @@
   }
 
   .app-title {
-    font-size: 3.5rem;
+    max-width: 240px;
     margin-top: 0.5rem;
   }
 
@@ -747,6 +779,7 @@
   animation: fadeIn 0.3s ease;
 }
 
+
 @keyframes fadeIn {
   from {
     opacity: 0;
@@ -797,6 +830,25 @@
   overflow: hidden;
 }
 
+.video-modal-logo {
+  position: absolute;
+  bottom: 1.5rem;
+  right: 1.5rem;
+  height: auto;
+  max-width: 200px;
+  width: auto;
+  object-fit: contain;
+  z-index: 1002;
+  opacity: 0.9;
+  transition: opacity 0.3s ease;
+  pointer-events: none;
+}
+
+.video-modal-logo:hover {
+  opacity: 1;
+}
+
+
 .modal-video {
   position: absolute;
   top: 0;
@@ -830,143 +882,3 @@
   opacity: 0;
 }
 
-/* Voice Input Component */
-.voice-input {
-  position: fixed;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  z-index: 20;
-  transform: translateY(100%);
-  transition: transform 0.5s cubic-bezier(0.4, 0, 0.2, 1);
-  pointer-events: none;
-}
-
-.voice-input-active {
-  transform: translateY(0);
-  pointer-events: auto;
-}
-
-.voice-input-container {
-  background: linear-gradient(to top, rgba(0, 0, 0, 0.95) 0%, rgba(0, 0, 0, 0.9) 50%, rgba(0, 0, 0, 0.85) 100%);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  border-top: 1px solid rgba(255, 255, 255, 0.2);
-  padding: 2rem;
-  display: flex;
-  flex-direction: column;
-  gap: 1.5rem;
-  min-height: 200px;
-  max-height: 40vh;
-}
-
-.voice-input-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 0.5rem;
-}
-
-.voice-input-close {
-  background: rgba(255, 255, 255, 0.1);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  border-radius: 50%;
-  width: 36px;
-  height: 36px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: white;
-  font-size: 24px;
-  line-height: 1;
-  cursor: pointer;
-  transition: all 0.3s ease;
-  font-family: 'Inter', sans-serif;
-}
-
-.voice-input-close:hover {
-  background: rgba(255, 255, 255, 0.2);
-  transform: scale(1.1);
-}
-
-.voice-input-title {
-  font-family: 'Forum', serif;
-  font-size: 1.5rem;
-  font-weight: 400;
-  color: white;
-  margin: 0;
-  flex: 1;
-  text-align: center;
-}
-
-.voice-visualization {
-  display: flex;
-  align-items: flex-end;
-  justify-content: center;
-  gap: 3px;
-  height: 120px;
-  padding: 1rem 0;
-  overflow: hidden;
-}
-
-.voice-bar {
-  width: 4px;
-  min-height: 10%;
-  background: linear-gradient(to top, rgba(59, 130, 246, 0.8), rgba(147, 197, 253, 0.9));
-  border-radius: 2px;
-  transition: height 0.1s ease;
-  box-shadow: 0 0 4px rgba(147, 197, 253, 0.5);
-}
-
-.voice-bar-idle {
-  background: linear-gradient(to top, rgba(255, 255, 255, 0.3), rgba(255, 255, 255, 0.5));
-  animation: voice-bar-pulse 1.5s ease-in-out infinite;
-  box-shadow: 0 0 2px rgba(255, 255, 255, 0.3);
-}
-
-@keyframes voice-bar-pulse {
-  0%, 100% {
-    height: 20%;
-    opacity: 0.5;
-  }
-  50% {
-    height: 40%;
-    opacity: 0.8;
-  }
-}
-
-.voice-input-footer {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  padding-top: 0.5rem;
-}
-
-.voice-input-status {
-  font-family: 'Inter', sans-serif;
-  font-size: 0.9rem;
-  color: rgba(255, 255, 255, 0.7);
-  margin: 0;
-  text-align: center;
-}
-
-/* Responsive adjustments for voice input */
-@media (max-width: 768px) {
-  .voice-input-container {
-    padding: 1.5rem 1rem;
-    min-height: 180px;
-  }
-
-  .voice-input-title {
-    font-size: 1.25rem;
-  }
-
-  .voice-visualization {
-    height: 100px;
-    gap: 2px;
-  }
-
-  .voice-bar {
-    width: 3px;
-  }
-}

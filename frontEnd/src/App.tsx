@@ -14,11 +14,6 @@ function App() {
   const [selectedDate, setSelectedDate] = useState<Date | null>(null)
   const [scrollingDate, setScrollingDate] = useState<Date | null>(null)
   const [selectedImageIndex, setSelectedImageIndex] = useState<number | null>(null)
-  const [isVoiceInputActive, setIsVoiceInputActive] = useState(false)
-  const [isDateSliderHidden, setIsDateSliderHidden] = useState(false)
-  const [audioData, setAudioData] = useState<number[]>([])
-  const [isCenterImageHeld, setIsCenterImageHeld] = useState(false)
-  const [borderProgress, setBorderProgress] = useState(0)
   const [showVideoModal, setShowVideoModal] = useState(false)
   const [pixelRevealProgress, setPixelRevealProgress] = useState(0)
   const sliderRef = useRef<HTMLDivElement>(null)
@@ -32,16 +27,8 @@ function App() {
   const hasMoved = useRef(false)
   const clickTarget = useRef<HTMLElement | null>(null)
   const justDragged = useRef(false)
-  const imageClickStarts = useRef<Map<string, { x: number; y: number; time: number }>>(new Map())
-  const audioContextRef = useRef<AudioContext | null>(null)
-  const analyserRef = useRef<AnalyserNode | null>(null)
-  const microphoneRef = useRef<MediaStreamAudioSourceNode | null>(null)
-  const streamRef = useRef<MediaStream | null>(null)
-  const animationFrameRef = useRef<number | null>(null)
-  const isVisualizingRef = useRef(false)
-  const centerImageHoldTimer = useRef<number | null>(null)
-  const borderAnimationFrame = useRef<number | null>(null)
   const pixelRevealTimer = useRef<number | null>(null)
+  const lastCenterClickTime = useRef<number>(0)
 
   // 3D card rotation state (user drag)
   const [cardRotations, setCardRotations] = useState<{
@@ -341,178 +328,22 @@ function App() {
     }
   }
 
-  // Handle center image click - only toggles voice input, doesn't affect image/date selection
-  const handleCenterImageClick = (e?: React.MouseEvent) => {
-    // Prevent any event propagation that might trigger other handlers
-    if (e) {
-      e.stopPropagation()
-      e.preventDefault()
-    }
-    
-    // Only toggle voice input, don't change any image/date selection state
-    if (isVoiceInputActive) {
-      // If voice input is already active, close it
-      stopVoiceInput()
-    } else {
-      // Hide date slider and show voice input
-      setIsDateSliderHidden(true)
-      setIsVoiceInputActive(true)
-      startVoiceInput()
-    }
-  }
-
-  // Start voice input and microphone
-  const startVoiceInput = async () => {
-    try {
-      // Request microphone access
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-      streamRef.current = stream
-
-      // Create audio context
-      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
-      audioContextRef.current = audioContext
-
-      // Create analyser node
-      const analyser = audioContext.createAnalyser()
-      analyser.fftSize = 256
-      analyser.smoothingTimeConstant = 0.8
-      analyserRef.current = analyser
-
-      // Create microphone source
-      const microphone = audioContext.createMediaStreamSource(stream)
-      microphoneRef.current = microphone
-      microphone.connect(analyser)
-
-      // Start visualization
-      visualizeAudio()
-    } catch (error) {
-      console.error('Error accessing microphone:', error)
-      // If microphone access fails, still show the UI but without audio visualization
-      setIsVoiceInputActive(true)
-    }
-  }
-
-  // Stop voice input and cleanup
-  const stopVoiceInput = () => {
-    // Stop audio visualization
-    isVisualizingRef.current = false
-    if (animationFrameRef.current) {
-      cancelAnimationFrame(animationFrameRef.current)
-      animationFrameRef.current = null
-    }
-
-    // Stop microphone stream
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop())
-      streamRef.current = null
-    }
-
-    // Close audio context
-    if (audioContextRef.current) {
-      audioContextRef.current.close()
-      audioContextRef.current = null
-    }
-
-    // Clear refs
-    analyserRef.current = null
-    microphoneRef.current = null
-    setAudioData([])
-
-    // Hide voice input and show date slider
-    setIsVoiceInputActive(false)
-    setIsDateSliderHidden(false)
-  }
-
-  // Visualize audio data
-  const visualizeAudio = () => {
-    if (!analyserRef.current) return
-
-    const analyser = analyserRef.current
-    const bufferLength = analyser.frequencyBinCount
-    const dataArray = new Uint8Array(bufferLength)
-    isVisualizingRef.current = true
-
-    const updateVisualization = () => {
-      if (!analyserRef.current || !isVisualizingRef.current) {
-        return
-      }
-
-      analyserRef.current.getByteFrequencyData(dataArray)
-
-      // Convert to array and normalize (0-100)
-      const normalizedData = Array.from(dataArray).slice(0, 40).map(value => (value / 255) * 100)
-      setAudioData(normalizedData)
-
-      animationFrameRef.current = requestAnimationFrame(updateVisualization)
-    }
-
-    updateVisualization()
-  }
-
   // Cleanup on unmount
   useEffect(() => {
     return () => {
-      stopVoiceInput()
-      if (centerImageHoldTimer.current) {
-        clearTimeout(centerImageHoldTimer.current)
-      }
-      if (borderAnimationFrame.current) {
-        cancelAnimationFrame(borderAnimationFrame.current)
-      }
       if (pixelRevealTimer.current) {
         clearInterval(pixelRevealTimer.current)
       }
     }
   }, [])
 
-  // Border animation when center image is held (works even during drag)
-  useEffect(() => {
-    if (!isCenterImageHeld) {
-      setBorderProgress(0)
-      if (borderAnimationFrame.current) {
-        cancelAnimationFrame(borderAnimationFrame.current)
-        borderAnimationFrame.current = null
-      }
-      return
-    }
-
-    const BORDER_ANIMATION_DURATION = 2000 // 2 seconds to complete border
-    const startTime = Date.now()
-
-    const animate = () => {
-      // Continue animation even if dragging - only stop if hold is released
-      if (!isCenterImageHeld) {
-        setBorderProgress(0)
-        if (borderAnimationFrame.current) {
-          cancelAnimationFrame(borderAnimationFrame.current)
-          borderAnimationFrame.current = null
-        }
-        return
-      }
-
-      const elapsed = Date.now() - startTime
-      const progress = Math.min(100, (elapsed / BORDER_ANIMATION_DURATION) * 100)
-      setBorderProgress(progress)
-
-      if (progress < 100) {
-        borderAnimationFrame.current = requestAnimationFrame(animate)
-      } else {
-        // Border complete - show video modal
-        setShowVideoModal(true)
-        setIsCenterImageHeld(false)
-        setBorderProgress(0)
-        startPixelReveal()
-      }
-    }
-
-    borderAnimationFrame.current = requestAnimationFrame(animate)
-
-    return () => {
-      if (borderAnimationFrame.current) {
-        cancelAnimationFrame(borderAnimationFrame.current)
-      }
-    }
-  }, [isCenterImageHeld])
+  // Handle double click/tap on center image to open video modal
+  const handleCenterImageDoubleClick = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    e.preventDefault()
+    setShowVideoModal(true)
+    startPixelReveal()
+  }
 
   // Pixel reveal animation for video modal
   const startPixelReveal = () => {
@@ -1047,19 +878,13 @@ function App() {
           currentX: e.clientX,
           currentY: e.clientY,
         }
+        
         return // Let React handlers process the click
       }
 
-      // For center image, don't start dragging immediately - wait for movement
-      // This allows border animation to work while holding
-      e.preventDefault()
-      e.stopPropagation()
+      // For center image, allow clicks/double-clicks to work - only start drag on movement
+      // Don't prevent default to allow React click handlers to process clicks
       justDragged.current = false // Reset drag flag
-      
-      // Set hold state for border animation (in case React handler didn't fire)
-      if (position === 'center') {
-        setIsCenterImageHeld(true)
-      }
       
       cardDragState.current = {
         isDragging: false, // Start as false, will be set to true on movement
@@ -1070,8 +895,7 @@ function App() {
         currentX: e.clientX,
         currentY: e.clientY,
       }
-      // Don't change cursor or styles yet - let border animation work
-      cardElement.style.pointerEvents = 'auto' // Ensure pointer events work
+      // Don't set pointer events here - let React handlers work
     }
 
     const handleCardMouseMove = (e: MouseEvent) => {
@@ -1156,11 +980,6 @@ function App() {
       const cardElement = cardDragState.current.cardElement
       const wasDragging = cardDragState.current.isDragging
       
-      // Stop hold state for center image (in case React handler didn't fire)
-      if (position === 'center') {
-        setIsCenterImageHeld(false)
-      }
-      
       if (wasDragging && position && cardElement) {
         // Re-enable transition for smooth spring-back and idle animation
         cardElement.style.transition = 'transform 0.6s cubic-bezier(0.25, 0.46, 0.45, 0.94)'
@@ -1211,11 +1030,6 @@ function App() {
       e.stopPropagation()
       const touch = e.touches[0]
       
-      // Set hold state for center image border animation
-      if (position === 'center') {
-        setIsCenterImageHeld(true)
-      }
-      
       cardDragState.current = {
         isDragging: false, // Start as false, will be set to true on movement
         cardPosition: position,
@@ -1225,7 +1039,6 @@ function App() {
         currentX: touch.clientX,
         currentY: touch.clientY,
       }
-      // Don't disable transition yet - let border animation work
       cardElement.style.pointerEvents = 'auto' // Ensure pointer events work
     }
 
@@ -1278,13 +1091,6 @@ function App() {
     }
 
     const handleCardTouchEnd = () => {
-      const position = cardDragState.current.cardPosition
-      
-      // Stop hold state for center image
-      if (position === 'center') {
-        setIsCenterImageHeld(false)
-      }
-      
       if (!cardDragState.current.isDragging) {
         // Reset state even if not dragging
         cardDragState.current = {
@@ -1299,6 +1105,7 @@ function App() {
         return
       }
 
+      const position = cardDragState.current.cardPosition
       const cardElement = cardDragState.current.cardElement
       if (position && cardElement) {
         // Re-enable transition for smooth spring-back and idle animation
@@ -1371,11 +1178,13 @@ function App() {
       </aside>
 
       {/* Top Header */}
-      <header className="header">
-        <div className="header-center">
-          <h1 className="app-title">Memento</h1>
-        </div>
-      </header>
+      {!showVideoModal && (
+        <header className="header">
+          <div className="header-center">
+            <img src="/logo.png" alt="Memento" className="app-title" />
+          </div>
+        </header>
+      )}
 
       {/* Main Content - Three Image Slots */}
       <div className="image-container" ref={imageContainerRef}>
@@ -1421,110 +1230,59 @@ function App() {
           // Only apply transform if animation is complete (so idle animation can take over)
           const shouldApplyTransform = animationState === 'complete'
           
-          // Handle click on left/right images to center them
-          const imageKey = `${image.url}-${image.position}-${image.date.getTime()}`
-          
-          const handleSlotMouseDown = (e: React.MouseEvent) => {
-            // Track for all images (including center)
-            // Stop propagation to prevent native drag handlers from interfering immediately
-            if (image.position !== 'center') {
-              e.stopPropagation()
-            }
-            imageClickStarts.current.set(imageKey, {
-              x: e.clientX,
-              y: e.clientY,
-              time: Date.now()
-            })
-
-            // For center image, start hold detection
-            if (image.position === 'center') {
-              setIsCenterImageHeld(true)
-            }
-          }
-          
-          const handleSlotMouseUp = (e: React.MouseEvent) => {
-            const clickStart = imageClickStarts.current.get(imageKey)
-            
-            // Stop hold detection for center image
-            if (image.position === 'center') {
-              setIsCenterImageHeld(false)
-            }
-            
-            // Check if this was a click (mouse didn't move much)
-            if (clickStart) {
-              const movedDistance = Math.sqrt(
-                Math.pow(e.clientX - clickStart.x, 2) +
-                Math.pow(e.clientY - clickStart.y, 2)
-              )
-              
-              // For left/right images, prioritize click over drag
-              // If mouse moved less than 10px, treat it as a click
-              // Use a small delay to check justDragged after drag handlers have run
-              setTimeout(() => {
-                if (image.position === 'center') {
-                  // Center image click only toggles voice input (if not held long enough for border)
-                  if (movedDistance < 10 && !justDragged.current && !cardDragState.current.isDragging && borderProgress < 50) {
-                    e.stopPropagation()
-                    e.preventDefault()
-                    handleCenterImageClick(e)
-                  }
-                } else {
-                  // Left/right images: click to center (allow slightly more movement for better click detection)
-                  if (movedDistance < 10 && !justDragged.current) {
-                    e.stopPropagation()
-                    e.preventDefault()
-                    handleImageClick(image.date)
-                  }
-                }
-              }, 50)
-            }
-            
-            imageClickStarts.current.delete(imageKey)
-          }
-          
           const handleSlotClick = (e: React.MouseEvent) => {
-            // Direct click handler as fallback for left/right images
-            if (image.position !== 'center') {
+            // Don't handle single click if it's part of a double click
+            // React's onDoubleClick will handle double clicks
+            if (image.position === 'center') {
+              // Single click on center image - do nothing (only double click opens video modal)
               e.stopPropagation()
               e.preventDefault()
-              // Only handle if it wasn't already handled by mouseup
-              const clickStart = imageClickStarts.current.get(imageKey)
-              if (!clickStart) {
-                handleImageClick(image.date)
+            } else {
+              // Single click on left/right images centers them
+              e.stopPropagation()
+              e.preventDefault()
+              handleImageClick(image.date)
+            }
+          }
+          
+          const handleSlotDoubleClick = (e: React.MouseEvent) => {
+            // Double click on center image opens video modal
+            if (image.position === 'center') {
+              e.stopPropagation()
+              e.preventDefault()
+              // Cancel any pending single click
+              lastCenterClickTime.current = 0
+              handleCenterImageDoubleClick(e)
+            }
+          }
+          
+          // Handle double tap on mobile
+          const handleSlotTouchEnd = (e: React.TouchEvent) => {
+            if (image.position === 'center') {
+              const now = Date.now()
+              const timeSinceLastTap = now - lastCenterClickTime.current
+              
+              if (timeSinceLastTap < 400 && timeSinceLastTap > 0 && lastCenterClickTime.current > 0) {
+                // Double tap detected - open video modal
+                e.stopPropagation()
+                e.preventDefault()
+                lastCenterClickTime.current = 0
+                handleCenterImageDoubleClick(e as any)
+              } else {
+                // First tap - wait to see if second tap comes
+                lastCenterClickTime.current = now
               }
             }
           }
           
-          // Calculate border animation for center image
-          const borderStyle = isCenter && isCenterImageHeld ? {
-            '--border-progress': `${borderProgress}%`
-          } as React.CSSProperties : {}
-          
           return (
             <div 
               key={`${image.url}-${image.position}-${image.date.getTime()}`}
-              className={`image-slot image-slot-${image.position} ${animationClass} ${isCenter && isCenterImageHeld ? 'center-image-held' : ''}`}
-              style={shouldApplyTransform ? { ...transformStyle, ...borderStyle } : borderStyle}
-              onMouseDown={handleSlotMouseDown}
-              onMouseUp={handleSlotMouseUp}
-              onMouseLeave={() => {
-                if (image.position === 'center') {
-                  setIsCenterImageHeld(false)
-                }
-              }}
-              onTouchStart={(e) => {
-                if (image.position === 'center') {
-                  setIsCenterImageHeld(true)
-                }
-                handleSlotMouseDown(e as any)
-              }}
-              onTouchEnd={(e) => {
-                if (image.position === 'center') {
-                  setIsCenterImageHeld(false)
-                }
-                handleSlotMouseUp(e as any)
-              }}
+              className={`image-slot image-slot-${image.position} ${animationClass}`}
+              style={shouldApplyTransform ? transformStyle : {}}
               onClick={handleSlotClick}
+              onDoubleClick={handleSlotDoubleClick}
+              onTouchEnd={handleSlotTouchEnd}
             >
               <img src={image.url} alt={image.position} />
               <div className={`image-caption ${shouldBeLarge ? 'caption-large' : ''}`}>
@@ -1539,7 +1297,7 @@ function App() {
       </div>
 
       {/* Bottom Date Slider */}
-      <div className={`date-slider ${isDateSliderHidden ? 'date-slider-hidden' : ''}`} ref={sliderRef}>
+      <div className="date-slider" ref={sliderRef}>
         <div className="date-slider-container" ref={containerRef}>
           {displayMonths.map((monthName) => {
             const currentDateForMonth = getCurrentDateForMonth(monthName)
@@ -1590,46 +1348,6 @@ function App() {
         </div>
       </div>
 
-      {/* Voice Input Component */}
-      <div className={`voice-input ${isVoiceInputActive ? 'voice-input-active' : ''}`}>
-        <div className="voice-input-container">
-          <div className="voice-input-header">
-            <button className="voice-input-close" onClick={stopVoiceInput}>×</button>
-            <h2 className="voice-input-title">Voice Memory</h2>
-          </div>
-          <div className="voice-visualization">
-            {audioData.length > 0 ? (
-              audioData.map((value, index) => (
-                <div
-                  key={index}
-                  className="voice-bar"
-                  style={{
-                    height: `${Math.max(10, value)}%`,
-                    animationDelay: `${index * 0.02}s`
-                  }}
-                />
-              ))
-            ) : (
-              // Show idle bars when no audio data
-              Array.from({ length: 40 }).map((_, index) => (
-                <div
-                  key={index}
-                  className="voice-bar voice-bar-idle"
-                  style={{
-                    animationDelay: `${index * 0.02}s`
-                  }}
-                />
-              ))
-            )}
-          </div>
-          <div className="voice-input-footer">
-            <p className="voice-input-status">
-              {streamRef.current ? 'Listening...' : 'Requesting microphone access...'}
-            </p>
-          </div>
-        </div>
-      </div>
-
       {/* Video Modal with Pixelated Reveal */}
       {showVideoModal && (
         <div className="video-modal-overlay" onClick={closeVideoModal}>
@@ -1664,6 +1382,8 @@ function App() {
                 <source src="/hero.mp4" type="video/mp4" />
                 Your browser does not support the video tag.
               </video>
+              {/* Logo in bottom right */}
+              <img src="/logo.png" alt="Memento" className="video-modal-logo" />
             </div>
           </div>
         </div>
