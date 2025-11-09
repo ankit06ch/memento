@@ -2,6 +2,44 @@ import { useState, useMemo, useRef, useEffect } from 'react'
 import { Bell, Upload, FileText } from 'lucide-react'
 import './App.css'
 
+// Typewriter effect hook
+const useTypewriter = (text: string, speed: number = 50, startDelay: number = 0) => {
+  const [displayedText, setDisplayedText] = useState('')
+  const [isComplete, setIsComplete] = useState(false)
+
+  useEffect(() => {
+    setDisplayedText('')
+    setIsComplete(false)
+    
+    let intervalId: NodeJS.Timeout | null = null
+    
+    const timer = setTimeout(() => {
+      let currentIndex = 0
+      intervalId = setInterval(() => {
+        if (currentIndex < text.length) {
+          setDisplayedText(text.slice(0, currentIndex + 1))
+          currentIndex++
+        } else {
+          setIsComplete(true)
+          if (intervalId) {
+            clearInterval(intervalId)
+            intervalId = null
+          }
+        }
+      }, speed)
+    }, startDelay)
+
+    return () => {
+      clearTimeout(timer)
+      if (intervalId) {
+        clearInterval(intervalId)
+      }
+    }
+  }, [text, speed, startDelay])
+
+  return { displayedText, isComplete }
+}
+
 interface DateItem {
   date: Date
   day: number
@@ -11,14 +49,24 @@ interface DateItem {
 }
 
 function App() {
+  const [showLanding, setShowLanding] = useState(true)
+  const [isAnimating, setIsAnimating] = useState(false)
+  const [showLoading, setShowLoading] = useState(false)
+  
+  // Typewriter effects - only show loading text when loading screen is visible
+  const landingOverview = useTypewriter('A journey through your cherished moments, captured in time.', 30, 500)
+  const loadingText = useTypewriter(showLoading ? 'Putting your memories together...' : '', 40, 200)
   const [selectedDate, setSelectedDate] = useState<Date | null>(null)
   const [scrollingDate, setScrollingDate] = useState<Date | null>(null)
   const [selectedImageIndex, setSelectedImageIndex] = useState<number | null>(null)
+  const [isCenterImageHeld, setIsCenterImageHeld] = useState(false)
+  const [borderProgress, setBorderProgress] = useState(0)
   const [showVideoModal, setShowVideoModal] = useState(false)
-  const [pixelRevealProgress, setPixelRevealProgress] = useState(0)
+  const [modalVideoUrl, setModalVideoUrl] = useState<string>('/hero.mp4')
   const sliderRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
+  const modalVideoRef = useRef<HTMLVideoElement>(null)
   const imageContainerRef = useRef<HTMLDivElement>(null)
   const hasCentered = useRef(false)
   const isDragging = useRef(false)
@@ -27,7 +75,9 @@ function App() {
   const hasMoved = useRef(false)
   const clickTarget = useRef<HTMLElement | null>(null)
   const justDragged = useRef(false)
-  const pixelRevealTimer = useRef<number | null>(null)
+  const imageClickStarts = useRef<Map<string, { x: number; y: number; time: number }>>(new Map())
+  const centerImageHoldTimer = useRef<number | null>(null)
+  const borderAnimationFrame = useRef<number | null>(null)
   const lastCenterClickTime = useRef<number>(0)
 
   // 3D card rotation state (user drag)
@@ -88,27 +138,36 @@ function App() {
     return new Date(now.getFullYear(), now.getMonth(), now.getDate())
   }, [])
 
-  // Generate dates for all 12 months (use current year)
+  // Generate dates from December 2023 to October 2025
   const allDates = useMemo(() => {
     const dateList: DateItem[] = []
-    const year = today.getFullYear()
+    const startYear = 2023
+    const endYear = 2025
+    const startMonth = 11 // December (0-indexed)
+    const endMonth = 9 // October (0-indexed)
 
-    for (let month = 0; month < 12; month++) {
-      const daysInMonth = new Date(year, month + 1, 0).getDate()
-      for (let day = 1; day <= daysInMonth; day++) {
-        const date = new Date(year, month, day)
-        dateList.push({
-          date,
-          day,
-          month,
-          year,
-          monthName: date.toLocaleDateString('en-US', { month: 'long' }),
-        })
+    // Start from December 2023
+    for (let year = startYear; year <= endYear; year++) {
+      const startM = year === startYear ? startMonth : 0
+      const endM = year === endYear ? endMonth : 11
+      
+      for (let month = startM; month <= endM; month++) {
+        const daysInMonth = new Date(year, month + 1, 0).getDate()
+        for (let day = 1; day <= daysInMonth; day++) {
+          const date = new Date(year, month, day)
+          dateList.push({
+            date,
+            day,
+            month,
+            year,
+            monthName: date.toLocaleDateString('en-US', { month: 'long', year: 'numeric' }),
+          })
+        }
       }
     }
 
     return dateList
-  }, [today])
+  }, [])
 
   // Group dates by month
   const datesByMonth = useMemo(() => {
@@ -130,29 +189,27 @@ function App() {
     ]
   }, [])
 
-  // Filter months to only show those that have valid dates (up to Nov 9th)
+  // Get display months from datesByMonth (includes year)
   const displayMonths = useMemo(() => {
-    return allMonthNames.filter(monthName => {
-      const monthDates = datesByMonth[monthName]
-      return monthDates && monthDates.length > 0
+    // Sort months chronologically
+    const monthKeys = Object.keys(datesByMonth).sort((a, b) => {
+      const dateA = datesByMonth[a][0].date
+      const dateB = datesByMonth[b][0].date
+      return dateA.getTime() - dateB.getTime()
     })
-  }, [datesByMonth, allMonthNames])
+    return monthKeys
+  }, [datesByMonth])
 
   // Get date day number to display for each month (only show circle for selected date, not today)
   const getCurrentDateForMonth = (monthName: string): number | null => {
-    const monthIndex = allMonthNames.indexOf(monthName)
-    if (monthIndex === -1) return null
+    if (!selectedDate) return null
     
-    const currentYear = today.getFullYear()
+    // monthName now includes year (e.g., "December 2023")
+    const normalizedSelected = normalizeDate(selectedDate)
+    const selectedMonthName = normalizedSelected.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
     
-    // Only show circle if there's a selected date in this month
-    if (selectedDate) {
-      const normalizedSelected = normalizeDate(selectedDate)
-      const selectedMonth = normalizedSelected.getMonth()
-      const selectedYear = normalizedSelected.getFullYear()
-      if (selectedMonth === monthIndex && selectedYear === currentYear) {
-        return normalizedSelected.getDate()
-      }
+    if (selectedMonthName === monthName) {
+      return normalizedSelected.getDate()
     }
     
     return null
@@ -160,17 +217,11 @@ function App() {
 
   // Count memories (images) for each month
   const getMemoryCountForMonth = (monthName: string): number => {
-    const monthIndex = allMonthNames.indexOf(monthName)
-    if (monthIndex === -1) return 0
-    
-    const currentYear = today.getFullYear()
-    
-    // Count images that have dates in this month and are valid (up to Nov 9th)
+    // monthName now includes year (e.g., "December 2023")
     return sampleImages.filter(img => {
       const imgDate = normalizeDate(img.date)
-      return imgDate.getMonth() === monthIndex && 
-             imgDate.getFullYear() === currentYear &&
-             isDateValid(imgDate)
+      const imgMonthName = imgDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+      return imgMonthName === monthName && isDateValid(imgDate)
     }).length
   }
 
@@ -182,44 +233,70 @@ function App() {
     return new Date(d.getFullYear(), d.getMonth(), d.getDate())
   }
 
-  // Get cutoff date (November 9th of current year)
+  // Get cutoff date (October 31, 2025)
   const cutoffDate = useMemo(() => {
-    return new Date(currentYear, 10, 9) // November 9th (month is 0-indexed, so 10 = November)
-  }, [currentYear])
+    return new Date(2025, 9, 31) // October 31, 2025 (month is 0-indexed, so 9 = October)
+  }, [])
 
-  // Check if a date is valid (up to November 9th of current year)
+  // Get start date (December 1, 2023)
+  const startDate = useMemo(() => {
+    return new Date(2023, 11, 1) // December 1, 2023 (month is 0-indexed, so 11 = December)
+  }, [])
+
+  // Check if a date is valid (between December 1, 2023 and October 31, 2025)
   const isDateValid = (date: Date): boolean => {
     const normalizedDate = normalizeDate(date)
-    return normalizedDate <= cutoffDate && normalizedDate.getFullYear() === currentYear
+    return normalizedDate >= startDate && normalizedDate <= cutoffDate
   }
 
-  // Sample image data with URLs, dates, and captions
-  // Note: Dates should be valid (up to November 9th) to show date labels
+  // Sample image data with URLs, dates, captions, and video URLs
+  // Dates spread from December 2023 to October 2025
   const sampleImages = useMemo(() => {
-    const year = currentYear
     return [
       {
-        url: 'https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=800&h=600&fit=crop',
-        date: new Date(year, 9, 3), // October 3rd
-        caption: 'Mountain Adventure'
+        url: '/10.JPG',
+        date: new Date(2023, 11, 15), // December 15, 2023
+        caption: 'Waterpark Day',
+        videoUrl: '/hero.mp4' // Fallback to hero video since no video for image 10
       },
       {
-        url: 'https://images.unsplash.com/photo-1469474968028-56623f02e42e?w=800&h=600&fit=crop',
-        date: new Date(year, 9, 15), // October 15th
-        caption: 'Sunset Memories'
+        url: '/4.jpg',
+        date: new Date(2024, 2, 1), // March 1, 2024
+        caption: 'College Move-In Day',
+        videoUrl: '/video_with_4_ref.mp4'
       },
       {
-        url: 'https://images.unsplash.com/photo-1441974231531-c6227db76b6e?w=800&h=600&fit=crop',
-        date: new Date(year, 10, 5), // November 5th
-        caption: 'Forest Walk'
+        url: '/5.JPG',
+        date: new Date(2024, 4, 15), // May 15, 2024
+        caption: 'Game Night in Atlanta',
+        videoUrl: '/video_with_5_ref.mp4'
       },
       {
-        url: 'https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=800&h=600&fit=crop',
-        date: new Date(year, 10, 9), // November 9th
-        caption: 'Final Day'
+        url: '/6.JPG',
+        date: new Date(2024, 7, 1), // August 1, 2024
+        caption: 'Switzerland Sunrise',
+        videoUrl: '/video_with_6_ref.mp4'
+      },
+      {
+        url: '/7.jpg',
+        date: new Date(2024, 9, 15), // October 15, 2024
+        caption: 'Georgia Tech Orientation',
+        videoUrl: '/video_with_7_ref.mp4'
+      },
+      {
+        url: '/8.JPG',
+        date: new Date(2025, 0, 1), // January 1, 2025
+        caption: 'Family Gathering',
+        videoUrl: '/video_with_8_ref.mp4'
+      },
+      {
+        url: '/9.JPG',
+        date: new Date(2025, 3, 15), // April 15, 2025
+        caption: 'Anniversary Celebration',
+        videoUrl: '/video_with_9_ref.mp4'
       },
     ]
-  }, [currentYear])
+  }, [])
 
   // Find which image corresponds to the selected date
   const getImageForDate = (date: Date): number => {
@@ -292,18 +369,26 @@ function App() {
     return getImageForDate(dateToUse)
   }, [selectedImageIndex, selectedDate, today, sampleImages, cutoffDate])
 
-  // Get ordered images (center, left, right)
+  // Get ordered images (center, left, right) - non-circular
   const orderedImages = useMemo(() => {
     if (sampleImages.length === 0) return []
     
-    const leftIndex = (centerImageIndex - 1 + sampleImages.length) % sampleImages.length
-    const rightIndex = (centerImageIndex + 1) % sampleImages.length
+    const images = []
     
-    return [
-      { ...sampleImages[leftIndex], position: 'left' as const },
-      { ...sampleImages[centerImageIndex], position: 'center' as const },
-      { ...sampleImages[rightIndex], position: 'right' as const },
-    ]
+    // Left image - only if not at the first image
+    if (centerImageIndex > 0) {
+      images.push({ ...sampleImages[centerImageIndex - 1], position: 'left' as const })
+    }
+    
+    // Center image - always present
+    images.push({ ...sampleImages[centerImageIndex], position: 'center' as const })
+    
+    // Right image - only if not at the last image
+    if (centerImageIndex < sampleImages.length - 1) {
+      images.push({ ...sampleImages[centerImageIndex + 1], position: 'right' as const })
+    }
+    
+    return images
   }, [centerImageIndex, sampleImages])
 
   // Handle image click to center it
@@ -331,48 +416,113 @@ function App() {
   // Cleanup on unmount
   useEffect(() => {
     return () => {
-      if (pixelRevealTimer.current) {
-        clearInterval(pixelRevealTimer.current)
+      if (centerImageHoldTimer.current) {
+        clearTimeout(centerImageHoldTimer.current)
+      }
+      if (borderAnimationFrame.current) {
+        cancelAnimationFrame(borderAnimationFrame.current)
       }
     }
   }, [])
 
-  // Handle double click/tap on center image to open video modal
+  // Border animation when center image is held (works even during drag)
+  // Also support double-click to open video modal
   const handleCenterImageDoubleClick = (e: React.MouseEvent) => {
     e.stopPropagation()
     e.preventDefault()
+    const centerImage = sampleImages[centerImageIndex]
+    if (centerImage && centerImage.videoUrl) {
+      setModalVideoUrl(centerImage.videoUrl)
+    }
     setShowVideoModal(true)
-    startPixelReveal()
   }
+  useEffect(() => {
+    if (!isCenterImageHeld) {
+      setBorderProgress(0)
+      if (borderAnimationFrame.current) {
+        cancelAnimationFrame(borderAnimationFrame.current)
+        borderAnimationFrame.current = null
+      }
+      return
+    }
 
-  // Pixel reveal animation for video modal
-  const startPixelReveal = () => {
-    setPixelRevealProgress(0)
-    const PIXEL_REVEAL_DURATION = 10000 // 10 seconds
+    const BORDER_ANIMATION_DURATION = 2000 // 2 seconds to complete border
     const startTime = Date.now()
 
-    pixelRevealTimer.current = window.setInterval(() => {
-      const elapsed = Date.now() - startTime
-      const progress = Math.min(100, (elapsed / PIXEL_REVEAL_DURATION) * 100)
-      setPixelRevealProgress(progress)
-
-      if (progress >= 100) {
-        if (pixelRevealTimer.current) {
-          clearInterval(pixelRevealTimer.current)
-          pixelRevealTimer.current = null
+    const animate = () => {
+      // Continue animation even if dragging - only stop if hold is released
+      if (!isCenterImageHeld) {
+        setBorderProgress(0)
+        if (borderAnimationFrame.current) {
+          cancelAnimationFrame(borderAnimationFrame.current)
+          borderAnimationFrame.current = null
         }
+        return
       }
-    }, 16) // ~60fps
+
+      const elapsed = Date.now() - startTime
+      const progress = Math.min(100, (elapsed / BORDER_ANIMATION_DURATION) * 100)
+      setBorderProgress(progress)
+
+      if (progress < 100) {
+        borderAnimationFrame.current = requestAnimationFrame(animate)
+      } else {
+        // Border complete - show video modal with current center image's video
+        const centerImage = sampleImages[centerImageIndex]
+        if (centerImage && centerImage.videoUrl) {
+          setModalVideoUrl(centerImage.videoUrl)
+          console.log('Setting video URL:', centerImage.videoUrl, 'for image:', centerImage.caption)
+        } else {
+          console.warn('No video URL found for center image:', centerImageIndex)
+        }
+        setShowVideoModal(true)
+        setIsCenterImageHeld(false)
+        setBorderProgress(0)
+      }
+    }
+
+    borderAnimationFrame.current = requestAnimationFrame(animate)
+
+    return () => {
+      if (borderAnimationFrame.current) {
+        cancelAnimationFrame(borderAnimationFrame.current)
+      }
+    }
+  }, [isCenterImageHeld, centerImageIndex, sampleImages])
+
+  // Handle launch button - animate logo and bring up timeline
+  const handleLaunch = () => {
+    setIsAnimating(true)
+    // After logo animation, show loading message
+    setTimeout(() => {
+      setShowLanding(false)
+      setShowLoading(true)
+      // After loading message, show main app
+      setTimeout(() => {
+        setShowLoading(false)
+        setIsAnimating(false)
+      }, 2000) // Show loading for 2 seconds
+    }, 1000) // Logo animation duration
   }
 
   const closeVideoModal = () => {
     setShowVideoModal(false)
-    setPixelRevealProgress(0)
-    if (pixelRevealTimer.current) {
-      clearInterval(pixelRevealTimer.current)
-      pixelRevealTimer.current = null
+    // Pause video when modal closes
+    if (modalVideoRef.current) {
+      modalVideoRef.current.pause()
     }
   }
+
+  // Ensure video plays when modal opens
+  useEffect(() => {
+    if (showVideoModal && modalVideoRef.current) {
+      const video = modalVideoRef.current
+      video.load() // Reload video to ensure it plays
+      video.play().catch(err => {
+        console.error('Error playing video:', err)
+      })
+    }
+  }, [showVideoModal, modalVideoUrl])
 
   const handleDateClick = (dateItem: DateItem) => {
     // Only allow clicking on valid dates (up to Nov 9th)
@@ -1160,8 +1310,48 @@ function App() {
         </video>
       </div>
 
+      {/* Landing Page */}
+      {showLanding && (
+        <div className={`landing-page ${isAnimating ? 'landing-page-exiting' : ''}`}>
+          <div className="landing-content">
+            <div className="landing-logo-container">
+              <img src="/logo.png" alt="Memento" className={`landing-logo ${isAnimating ? 'landing-logo-animating' : ''}`} />
+            </div>
+            <div className="landing-overview">
+              <p className="landing-text">
+                {landingOverview.displayedText}
+                {landingOverview.displayedText.length > 0 && <span className="typewriter-cursor">|</span>}
+              </p>
+            </div>
+            <button className="launch-button" onClick={handleLaunch} disabled={!landingOverview.isComplete}>
+              Launch
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Loading Screen */}
+      {showLoading && (
+        <div className="loading-screen">
+          <div className="loading-content">
+            <div className="loading-logo">
+              <img src="/logo.png" alt="Memento" className="loading-logo-img" />
+            </div>
+            <p className="loading-text">
+              {loadingText.displayedText}
+              {loadingText.displayedText.length > 0 && <span className="typewriter-cursor">|</span>}
+            </p>
+            <div className="loading-dots">
+              <span className="dot"></span>
+              <span className="dot"></span>
+              <span className="dot"></span>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Left Sidebar */}
-      <aside className="sidebar">
+      <aside className={`sidebar ${showLanding || showLoading ? 'sidebar-hidden' : ''}`}>
         <button className="sidebar-icon-button sidebar-user-button">
           <img src="/user.jpeg" alt="User" className="sidebar-user-avatar" />
         </button>
@@ -1179,15 +1369,15 @@ function App() {
 
       {/* Top Header */}
       {!showVideoModal && (
-        <header className="header">
+        <header className={`header ${showLanding || showLoading ? 'header-hidden' : 'header-visible'}`}>
           <div className="header-center">
-            <img src="/logo.png" alt="Memento" className="app-title" />
+            <img src="/logo.png" alt="Memento" className={`app-title ${isAnimating && !showLoading ? 'app-title-animating' : ''}`} />
           </div>
         </header>
       )}
 
       {/* Main Content - Three Image Slots */}
-      <div className="image-container" ref={imageContainerRef}>
+      <div className={`image-container ${showLanding || showLoading ? 'image-container-hidden' : ''}`} ref={imageContainerRef}>
         {orderedImages.map((image) => {
           const imageDateStr = image.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
           const wordCount = image.caption.split(/\s+/).filter(word => word.length > 0).length
@@ -1297,7 +1487,7 @@ function App() {
       </div>
 
       {/* Bottom Date Slider */}
-      <div className="date-slider" ref={sliderRef}>
+      <div className={`date-slider ${showLanding || showLoading ? 'date-slider-hidden' : 'date-slider-visible'}`} ref={sliderRef}>
         <div className="date-slider-container" ref={containerRef}>
           {displayMonths.map((monthName) => {
             const currentDateForMonth = getCurrentDateForMonth(monthName)
@@ -1310,7 +1500,7 @@ function App() {
                       {currentDateForMonth}
                     </div>
                   )}
-                  <span className="month-name">{monthName} {currentYear}</span>
+                  <span className="month-name">{monthName}</span>
               </div>
               <div className="month-dates">
                   {datesByMonth[monthName]?.map((dateItem, index) => {
@@ -1348,38 +1538,33 @@ function App() {
         </div>
       </div>
 
-      {/* Video Modal with Pixelated Reveal */}
+      {/* Video Modal */}
       {showVideoModal && (
         <div className="video-modal-overlay" onClick={closeVideoModal}>
           <div className="video-modal" onClick={(e) => e.stopPropagation()}>
             <button className="video-modal-close" onClick={closeVideoModal}>×</button>
             <div className="video-modal-content">
-              <div className="pixel-grid">
-                {Array.from({ length: 400 }, (_, index) => {
-                  // Randomize pixel reveal order for organic appearance
-                  const randomOrder = (index * 7919) % 400 // Use prime number for pseudo-random distribution
-                  const revealTime = (randomOrder / 400) * 10 // 0-10 seconds
-                  const shouldShow = revealTime <= (pixelRevealProgress / 100) * 10
-                  return (
-                    <div
-                      key={index}
-                      className={`pixel ${shouldShow ? 'pixel-visible' : ''}`}
-                      style={{
-                        transitionDelay: `${revealTime * 0.1}s`
-                      }}
-                    />
-                  )
-                })}
-              </div>
               <video
+                ref={modalVideoRef}
                 className="modal-video"
                 autoPlay
-                muted
                 loop
                 playsInline
-                style={{ opacity: pixelRevealProgress >= 100 ? 1 : 0 }}
+                key={modalVideoUrl}
+                onError={(e) => {
+                  console.error('Video error:', e)
+                  console.error('Failed to load video:', modalVideoUrl)
+                }}
+                onLoadedData={() => {
+                  console.log('Video loaded successfully:', modalVideoUrl)
+                  if (modalVideoRef.current) {
+                    modalVideoRef.current.play().catch(err => {
+                      console.error('Error playing video after load:', err)
+                    })
+                  }
+                }}
               >
-                <source src="/hero.mp4" type="video/mp4" />
+                <source src={modalVideoUrl} type="video/mp4" />
                 Your browser does not support the video tag.
               </video>
               {/* Logo in bottom right */}
@@ -1393,3 +1578,4 @@ function App() {
 }
 
 export default App
+
