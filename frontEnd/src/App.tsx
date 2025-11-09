@@ -65,6 +65,9 @@ function App() {
   const [modalVideoUrl, setModalVideoUrl] = useState<string>('/hero.mp4')
   const [showWaveform, setShowWaveform] = useState(false)
   const [waveformData, setWaveformData] = useState<number[]>([])
+  const [showUploadModal, setShowUploadModal] = useState(false)
+  const [uploadedImage, setUploadedImage] = useState<string | null>(null)
+  const [isDraggingOver, setIsDraggingOver] = useState(false)
   const sliderRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
@@ -145,13 +148,14 @@ function App() {
     return new Date(now.getFullYear(), now.getMonth(), now.getDate())
   }, [])
 
-  // Generate dates from December 2023 to October 2025
+  // Generate dates from December 2023 to November 9, 2025
   const allDates = useMemo(() => {
     const dateList: DateItem[] = []
     const startYear = 2023
     const endYear = 2025
     const startMonth = 11 // December (0-indexed)
-    const endMonth = 9 // October (0-indexed)
+    const endMonth = 10 // November (0-indexed)
+    const endDay = 9 // November 9, 2025
 
     // Start from December 2023
     for (let year = startYear; year <= endYear; year++) {
@@ -159,16 +163,17 @@ function App() {
       const endM = year === endYear ? endMonth : 11
       
       for (let month = startM; month <= endM; month++) {
-        const daysInMonth = new Date(year, month + 1, 0).getDate()
-        for (let day = 1; day <= daysInMonth; day++) {
-          const date = new Date(year, month, day)
-          dateList.push({
-            date,
-            day,
-            month,
-            year,
+      const daysInMonth = new Date(year, month + 1, 0).getDate()
+        const maxDay = (year === endYear && month === endMonth) ? endDay : daysInMonth
+        for (let day = 1; day <= maxDay; day++) {
+        const date = new Date(year, month, day)
+        dateList.push({
+          date,
+          day,
+          month,
+          year,
             monthName: date.toLocaleDateString('en-US', { month: 'long', year: 'numeric' }),
-          })
+        })
         }
       }
     }
@@ -212,11 +217,11 @@ function App() {
     if (!selectedDate) return null
     
     // monthName now includes year (e.g., "December 2023")
-    const normalizedSelected = normalizeDate(selectedDate)
+      const normalizedSelected = normalizeDate(selectedDate)
     const selectedMonthName = normalizedSelected.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
     
     if (selectedMonthName === monthName) {
-      return normalizedSelected.getDate()
+        return normalizedSelected.getDate()
     }
     
     return null
@@ -240,9 +245,9 @@ function App() {
     return new Date(d.getFullYear(), d.getMonth(), d.getDate())
   }
 
-  // Get cutoff date (October 31, 2025)
+  // Get cutoff date (November 9, 2025 - extended for uploads)
   const cutoffDate = useMemo(() => {
-    return new Date(2025, 9, 31) // October 31, 2025 (month is 0-indexed, so 9 = October)
+    return new Date(2025, 10, 9) // November 9, 2025 (month is 0-indexed, so 10 = November)
   }, [])
 
   // Get start date (December 1, 2023)
@@ -276,9 +281,9 @@ function App() {
   }, [])
 
   // Sample image data with URLs, dates, captions, and video URLs
-  // Dates spread from December 2023 to October 2025
+  // Dates spread from December 2023 to November 2025
   const sampleImages = useMemo(() => {
-    return [
+    const images = [
       {
         url: '/10.JPG',
         date: new Date(2023, 11, 15), // December 15, 2023
@@ -322,7 +327,20 @@ function App() {
         videoUrl: '/video_with_9_ref.mp4'
       },
     ]
-  }, [])
+
+    // Add uploaded image if it exists (November 9, 2025)
+    if (uploadedImage) {
+      images.push({
+        url: uploadedImage,
+        date: new Date(2025, 10, 9), // November 9, 2025
+        caption: 'Presenting at AI ATL',
+        videoUrl: '/video_with_12_ref.mp4'
+      })
+    }
+
+    // Sort by date
+    return images.sort((a, b) => a.date.getTime() - b.date.getTime())
+  }, [uploadedImage])
 
   // Check if a date has a memory (real image or fake memory)
   const hasMemory = (date: Date): boolean => {
@@ -427,13 +445,68 @@ function App() {
     return images
   }, [centerImageIndex, sampleImages])
 
+  // Handle file upload
+  const handleFileUpload = (file: File) => {
+    if (file.type.startsWith('image/')) {
+      const reader = new FileReader()
+      reader.onload = (e) => {
+        const imageUrl = e.target?.result as string
+        setUploadedImage(imageUrl)
+        setShowUploadModal(false)
+        
+        // Select today's date (November 9, 2025) first
+        const todayDate = new Date(2025, 10, 9)
+        setSelectedDate(todayDate)
+        
+        // Show waveform and video modal after a brief delay to ensure state is updated
+        setTimeout(() => {
+          setModalVideoUrl('/video_with_12_ref.mp4')
+          setShowWaveform(true)
+          setShowVideoModal(true)
+        }, 100)
+      }
+      reader.readAsDataURL(file)
+    }
+  }
+
+  // Handle drag and drop
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDraggingOver(true)
+  }
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDraggingOver(false)
+  }
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDraggingOver(false)
+
+    const files = Array.from(e.dataTransfer.files)
+    if (files.length > 0) {
+      handleFileUpload(files[0])
+    }
+  }
+
+  const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files
+    if (files && files.length > 0) {
+      handleFileUpload(files[0])
+    }
+  }
+
   // Handle image click to center it
   const handleImageClick = (imageDate: Date) => {
     // Don't handle click if we're dragging
     if (cardDragState.current.isDragging) {
-      return
-    }
-    
+        return
+      }
+
     // Find the index of the clicked image in sampleImages
     const clickedImageIndex = sampleImages.findIndex(img => {
       const imgDate = normalizeDate(img.date)
@@ -470,7 +543,7 @@ function App() {
     if (centerImage && centerImage.videoUrl) {
       setModalVideoUrl(centerImage.videoUrl)
     }
-    // Show waveform first, then video after 45 seconds
+    // Show waveform first, then video after 15 seconds
     setShowWaveform(true)
     setShowVideoModal(true)
   }
@@ -513,7 +586,7 @@ function App() {
         } else {
           console.warn('No video URL found for center image:', centerImageIndex)
         }
-        // Show waveform first, then video after 45 seconds
+        // Show waveform first, then video after 15 seconds
         setShowWaveform(true)
         setShowVideoModal(true)
         setIsCenterImageHeld(false)
@@ -546,6 +619,8 @@ function App() {
   }
 
   const closeVideoModal = () => {
+    const wasShowingUploadedVideo = uploadedImage && modalVideoUrl === '/video_with_12_ref.mp4'
+    
     setShowVideoModal(false)
     setShowWaveform(false)
     setWaveformData([])
@@ -565,6 +640,71 @@ function App() {
     // Pause video when modal closes
     if (modalVideoRef.current) {
       modalVideoRef.current.pause()
+    }
+    
+    // If this was the uploaded image video, select it and scroll to it
+    if (wasShowingUploadedVideo && uploadedImage) {
+      const todayDate = new Date(2025, 10, 9) // November 9, 2025
+      
+      // Clear any existing image selection first, then set the date
+      setSelectedImageIndex(null)
+      setSelectedDate(todayDate)
+      setScrollingDate(todayDate)
+      
+      // Wait for state to update, then find and select the uploaded image
+      setTimeout(() => {
+        // The uploaded image should be in sampleImages now
+        // Find it by matching the date and checking if URL matches uploadedImage
+        const imageIndex = sampleImages.findIndex(img => {
+          const imgDate = normalizeDate(img.date)
+          const normalizedToday = normalizeDate(todayDate)
+          const dateMatches = imgDate.getTime() === normalizedToday.getTime()
+          // Check if it's the uploaded image by comparing URL or caption
+          const isUploadedImage = img.caption === 'Presenting at AI ATL' || img.url === uploadedImage
+          return dateMatches && isUploadedImage
+        })
+        
+        if (imageIndex !== -1) {
+          setSelectedImageIndex(imageIndex)
+        } else {
+          // Fallback: use date-based selection (getImageForDate will find it)
+          // Just ensure the date is set, and getImageForDate will handle the rest
+        }
+        
+        // Scroll to November 9, 2025 in the date slider
+        // Use multiple attempts to find the date element (DOM might not be ready)
+        const scrollToDate = (attempt = 0) => {
+          if (attempt > 5) {
+            console.warn('Could not find date element for November 9, 2025')
+            return
+          }
+          
+          const monthName = todayDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+          const day = todayDate.getDate()
+          const dateElement = containerRef.current?.querySelector(
+            `[data-date-key="${monthName}-${day}"]`
+          ) as HTMLElement
+          
+          if (dateElement && sliderRef.current) {
+            const slider = sliderRef.current
+            const sliderRect = slider.getBoundingClientRect()
+            const elementRect = dateElement.getBoundingClientRect()
+            const elementCenter = elementRect.left + elementRect.width / 2
+            const sliderCenter = sliderRect.left + sliderRect.width / 2
+            const scrollPosition = slider.scrollLeft + (elementCenter - sliderCenter)
+            
+            slider.scrollTo({
+              left: Math.max(0, scrollPosition),
+              behavior: 'smooth'
+            })
+          } else {
+            // Retry after a short delay
+            setTimeout(() => scrollToDate(attempt + 1), 200)
+          }
+        }
+        
+        setTimeout(() => scrollToDate(), 500)
+      }, 300)
     }
   }
 
@@ -693,7 +833,7 @@ function App() {
     }
   }, [showWaveform])
 
-  // Handle 45-second delay before showing video
+  // Handle 15-second delay before showing video
   useEffect(() => {
     if (showWaveform && showVideoModal) {
       const timer = setTimeout(() => {
@@ -706,11 +846,13 @@ function App() {
             console.error('Error playing video:', err)
           })
         }
-      }, 45000) // 45 seconds
+        // After video starts playing, keep modal open and let user watch
+        // The image will be visible in carousel once modal is closed manually or automatically
+      }, 15000) // 15 seconds
 
       return () => clearTimeout(timer)
     }
-  }, [showWaveform, showVideoModal])
+  }, [showWaveform, showVideoModal, uploadedImage, sampleImages])
 
   // Ensure video plays when modal opens (only if waveform is not showing)
   useEffect(() => {
@@ -1616,7 +1758,10 @@ function App() {
         <button className="sidebar-icon-button">
           <Bell size={24} />
         </button>
-        <button className="sidebar-icon-button">
+        <button 
+          className="sidebar-icon-button"
+          onClick={() => setShowUploadModal(true)}
+        >
           <Upload size={24} />
         </button>
         <button className="sidebar-icon-button">
@@ -1627,10 +1772,10 @@ function App() {
       {/* Top Header */}
       {!showVideoModal && (
         <header className={`header ${showLanding || showLoading ? 'header-hidden' : 'header-visible'}`}>
-          <div className="header-center">
+        <div className="header-center">
             <img src="/logo.png" alt="Memento" className={`app-title ${isAnimating && !showLoading ? 'app-title-animating' : ''}`} />
-          </div>
-        </header>
+        </div>
+      </header>
       )}
 
       {/* Main Content - Three Image Slots */}
@@ -1682,14 +1827,14 @@ function App() {
             // React's onDoubleClick will handle double clicks
             if (image.position === 'center') {
               // Single click on center image - do nothing (only double click opens video modal)
-              e.stopPropagation()
-              e.preventDefault()
-            } else {
+                    e.stopPropagation()
+                    e.preventDefault()
+                } else {
               // Single click on left/right images centers them
-              e.stopPropagation()
-              e.preventDefault()
-              handleImageClick(image.date)
-            }
+                    e.stopPropagation()
+                    e.preventDefault()
+                    handleImageClick(image.date)
+                  }
           }
           
           const handleSlotDoubleClick = (e: React.MouseEvent) => {
@@ -1711,8 +1856,8 @@ function App() {
               
               if (timeSinceLastTap < 400 && timeSinceLastTap > 0 && lastCenterClickTime.current > 0) {
                 // Double tap detected - open video modal
-                e.stopPropagation()
-                e.preventDefault()
+              e.stopPropagation()
+              e.preventDefault()
                 lastCenterClickTime.current = 0
                 handleCenterImageDoubleClick(e as any)
               } else {
@@ -1779,11 +1924,11 @@ function App() {
                         <span className="month-memory-count">{memoryCount} {memoryCount === 1 ? 'memory' : 'memories'}</span>
                       )}
                       {showLine && (
-                        <div
-                          data-date-key={`${monthName}-${dateItem.day}`}
-                          data-date-item={`${dateItem.date.getTime()}`}
+                      <div
+                        data-date-key={`${monthName}-${dateItem.day}`}
+                        data-date-item={`${dateItem.date.getTime()}`}
                           className={`date-line-wrapper ${isSelected ? 'selected' : ''} ${isCurrentDate ? 'current-date' : ''} ${!isValid ? 'disabled' : ''} ${isScrollingTo ? 'scrolling-to' : ''} ${hasMemoryOnDate ? 'has-memory' : ''}`}
-                          onClick={() => handleDateClick(dateItem)}
+                        onClick={() => handleDateClick(dateItem)}
                           title={`${monthName} ${dateItem.day}${!isValid ? ' (Not yet available)' : hasMemoryOnDate && !sampleImages.some(img => normalizeDate(img.date).getTime() === normalizeDate(dateItem.date).getTime()) ? ' (Memory)' : ''}`}
                           style={{ 
                             opacity: isValid ? (hasMemoryOnDate ? 0.8 : 0.4) : 0.2, 
@@ -1791,7 +1936,7 @@ function App() {
                           }}
                         >
                           <div className={`date-line ${isSelected ? 'selected' : ''} ${isCurrentDate ? 'current-date' : ''} ${isScrollingTo ? 'scrolling-to' : ''} ${hasMemoryOnDate ? 'has-memory' : ''}`}></div>
-                        </div>
+                      </div>
                       )}
                     </div>
                   )
@@ -1813,23 +1958,23 @@ function App() {
                 <div className="waveform-container">
                   <div className="waveform">
                     {waveformData.map((amplitude, index) => (
-                      <div
-                        key={index}
+                    <div
+                      key={index}
                         className="waveform-bar"
-                        style={{
+                      style={{
                           height: `${Math.max(2, amplitude * 100)}%`
-                        }}
-                      />
+                      }}
+                    />
                     ))}
-                  </div>
+              </div>
                 </div>
               ) : (
-                <video
+              <video
                   ref={modalVideoRef}
-                  className="modal-video"
-                  autoPlay
-                  loop
-                  playsInline
+                className="modal-video"
+                autoPlay
+                loop
+                playsInline
                   key={modalVideoUrl}
                   onError={(e) => {
                     console.error('Video error:', e)
@@ -1845,11 +1990,41 @@ function App() {
                   }}
                 >
                   <source src={modalVideoUrl} type="video/mp4" />
-                  Your browser does not support the video tag.
-                </video>
+                Your browser does not support the video tag.
+              </video>
               )}
               {/* Logo in bottom right */}
               <img src="/logo.png" alt="Memento" className="video-modal-logo" />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Upload Modal */}
+      {showUploadModal && (
+        <div className="upload-modal-overlay" onClick={() => setShowUploadModal(false)}>
+          <div 
+            className="upload-modal" 
+            onClick={(e) => e.stopPropagation()}
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+          >
+            <button className="upload-modal-close" onClick={() => setShowUploadModal(false)}>×</button>
+            <div className={`upload-modal-content ${isDraggingOver ? 'drag-over' : ''}`}>
+              <Upload size={48} />
+              <h2 className="upload-modal-title">Upload a Memory</h2>
+              <p className="upload-modal-text">Drag and drop an image here, or click to browse</p>
+              <input
+                type="file"
+                id="file-upload"
+                accept="image/*"
+                onChange={handleFileInputChange}
+                style={{ display: 'none' }}
+              />
+              <label htmlFor="file-upload" className="upload-button">
+                Choose File
+              </label>
             </div>
           </div>
         </div>
