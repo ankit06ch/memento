@@ -63,11 +63,18 @@ function App() {
   const [borderProgress, setBorderProgress] = useState(0)
   const [showVideoModal, setShowVideoModal] = useState(false)
   const [modalVideoUrl, setModalVideoUrl] = useState<string>('/hero.mp4')
+  const [showWaveform, setShowWaveform] = useState(false)
+  const [waveformData, setWaveformData] = useState<number[]>([])
   const sliderRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
   const modalVideoRef = useRef<HTMLVideoElement>(null)
   const imageContainerRef = useRef<HTMLDivElement>(null)
+  const audioContextRef = useRef<AudioContext | null>(null)
+  const analyserRef = useRef<AnalyserNode | null>(null)
+  const microphoneRef = useRef<MediaStreamAudioSourceNode | null>(null)
+  const streamRef = useRef<MediaStream | null>(null)
+  const animationFrameRef = useRef<number | null>(null)
   const hasCentered = useRef(false)
   const isDragging = useRef(false)
   const startX = useRef(0)
@@ -249,6 +256,25 @@ function App() {
     return normalizedDate >= startDate && normalizedDate <= cutoffDate
   }
 
+  // Generate fake memory dates (random dates with memories but no images)
+  const fakeMemoryDates = useMemo(() => {
+    const fakeDates: Date[] = []
+    const start = new Date(2023, 11, 1) // December 1, 2023
+    const end = new Date(2025, 9, 31) // October 31, 2025
+    const totalDays = Math.floor((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24))
+    
+    // Generate approximately 120 fake memory dates scattered throughout the range
+    const numFakeMemories = 120
+    for (let i = 0; i < numFakeMemories; i++) {
+      const randomDay = Math.floor(Math.random() * totalDays)
+      const fakeDate = new Date(start)
+      fakeDate.setDate(fakeDate.getDate() + randomDay)
+      fakeDates.push(normalizeDate(fakeDate))
+    }
+    
+    return fakeDates
+  }, [])
+
   // Sample image data with URLs, dates, captions, and video URLs
   // Dates spread from December 2023 to October 2025
   const sampleImages = useMemo(() => {
@@ -256,8 +282,8 @@ function App() {
       {
         url: '/10.JPG',
         date: new Date(2023, 11, 15), // December 15, 2023
-        caption: 'Waterpark Day',
-        videoUrl: '/hero.mp4' // Fallback to hero video since no video for image 10
+        caption: 'Internship Completion',
+        videoUrl: '/video_with_10_ref.mp4'
       },
       {
         url: '/4.jpg',
@@ -297,6 +323,16 @@ function App() {
       },
     ]
   }, [])
+
+  // Check if a date has a memory (real image or fake memory)
+  const hasMemory = (date: Date): boolean => {
+    const normalized = normalizeDate(date)
+    // Check if it's a real image
+    const hasRealImage = sampleImages.some(img => normalizeDate(img.date).getTime() === normalized.getTime())
+    // Check if it's a fake memory
+    const hasFakeMemory = fakeMemoryDates.some(fakeDate => fakeDate.getTime() === normalized.getTime())
+    return hasRealImage || hasFakeMemory
+  }
 
   // Find which image corresponds to the selected date
   const getImageForDate = (date: Date): number => {
@@ -434,6 +470,8 @@ function App() {
     if (centerImage && centerImage.videoUrl) {
       setModalVideoUrl(centerImage.videoUrl)
     }
+    // Show waveform first, then video after 45 seconds
+    setShowWaveform(true)
     setShowVideoModal(true)
   }
   useEffect(() => {
@@ -475,6 +513,8 @@ function App() {
         } else {
           console.warn('No video URL found for center image:', centerImageIndex)
         }
+        // Show waveform first, then video after 45 seconds
+        setShowWaveform(true)
         setShowVideoModal(true)
         setIsCenterImageHeld(false)
         setBorderProgress(0)
@@ -507,22 +547,181 @@ function App() {
 
   const closeVideoModal = () => {
     setShowVideoModal(false)
+    setShowWaveform(false)
+    setWaveformData([])
+    // Clean up microphone access
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop())
+      streamRef.current = null
+    }
+    if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+      audioContextRef.current.close().catch(console.error)
+      audioContextRef.current = null
+    }
+    if (animationFrameRef.current) {
+      cancelAnimationFrame(animationFrameRef.current)
+      animationFrameRef.current = null
+    }
     // Pause video when modal closes
     if (modalVideoRef.current) {
       modalVideoRef.current.pause()
     }
   }
 
-  // Ensure video plays when modal opens
+  // Access microphone and generate real-time waveform data
   useEffect(() => {
-    if (showVideoModal && modalVideoRef.current) {
+    if (!showWaveform) {
+      // Clean up when waveform is hidden
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop())
+        streamRef.current = null
+      }
+      if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+        audioContextRef.current.close()
+        audioContextRef.current = null
+      }
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current)
+        animationFrameRef.current = null
+      }
+      analyserRef.current = null
+      microphoneRef.current = null
+      return
+    }
+
+    const numBars = 60 // Reduced number of bars for cleaner look
+    const initialData = Array.from({ length: numBars }, () => 0)
+    setWaveformData(initialData)
+
+    // Initialize audio context and microphone
+    const initMicrophone = async () => {
+      try {
+        // Request microphone access
+        const stream = await navigator.mediaDevices.getUserMedia({ 
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+          } 
+        })
+        streamRef.current = stream
+
+        // Create audio context
+        const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
+        audioContextRef.current = audioContext
+
+        // Create analyser node
+        const analyser = audioContext.createAnalyser()
+        analyser.fftSize = 2048 // Higher FFT for better frequency resolution
+        analyser.smoothingTimeConstant = 0.7 // Less smoothing for more responsive visualization
+        analyserRef.current = analyser
+
+        // Create microphone source
+        const microphone = audioContext.createMediaStreamSource(stream)
+        microphoneRef.current = microphone
+
+        // Connect microphone to analyser
+        microphone.connect(analyser)
+
+        // Create frequency data array
+        const bufferLength = analyser.frequencyBinCount
+        const dataArray = new Uint8Array(bufferLength)
+
+        // Animation function to update waveform
+        const updateWaveform = () => {
+          if (!analyserRef.current || !showWaveform) return
+
+          analyserRef.current.getByteFrequencyData(dataArray)
+
+          // Map frequency data to waveform bars with logarithmic scaling for more realistic representation
+          const waveform = Array.from({ length: numBars }, (_, i) => {
+            // Focus on lower frequencies (speech range: 85-3400 Hz)
+            // Map bar index to frequency range more realistically
+            const startIndex = Math.floor((i / numBars) * bufferLength * 0.3) // Focus on lower 30% of frequencies
+            const endIndex = Math.floor(((i + 1) / numBars) * bufferLength * 0.3)
+            
+            let maxValue = 0
+            for (let j = startIndex; j < endIndex && j < bufferLength; j++) {
+              maxValue = Math.max(maxValue, dataArray[j])
+            }
+            
+            // Convert to decibels for more realistic representation
+            // Normalize: 0-255 -> 0-1, then apply logarithmic scaling
+            const normalized = maxValue / 255
+            // Apply logarithmic scaling (more realistic for audio)
+            const dbValue = normalized > 0 ? Math.log10(normalized * 9 + 1) : 0
+            // Scale to realistic range (speech typically -40dB to 0dB relative)
+            const scaled = dbValue * 0.6 // Reduce amplification for more realistic levels
+            return Math.max(0.03, Math.min(0.95, scaled)) // Clamp to reasonable range
+          })
+
+          setWaveformData(waveform)
+          animationFrameRef.current = requestAnimationFrame(updateWaveform)
+        }
+
+        // Start animation
+        updateWaveform()
+
+      } catch (error) {
+        console.error('Error accessing microphone:', error)
+        // Fallback to simulated data if microphone access fails
+        const interval = setInterval(() => {
+          setWaveformData(prev => prev.map(() => Math.random() * 0.5 + 0.1))
+        }, 100)
+        return () => clearInterval(interval)
+      }
+    }
+
+    initMicrophone()
+
+    return () => {
+      // Cleanup
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current)
+        animationFrameRef.current = null
+      }
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop())
+        streamRef.current = null
+      }
+      if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+        audioContextRef.current.close().catch(console.error)
+        audioContextRef.current = null
+      }
+      analyserRef.current = null
+      microphoneRef.current = null
+    }
+  }, [showWaveform])
+
+  // Handle 45-second delay before showing video
+  useEffect(() => {
+    if (showWaveform && showVideoModal) {
+      const timer = setTimeout(() => {
+        setShowWaveform(false)
+        // Now show the video
+        if (modalVideoRef.current) {
+          const video = modalVideoRef.current
+          video.load()
+          video.play().catch(err => {
+            console.error('Error playing video:', err)
+          })
+        }
+      }, 45000) // 45 seconds
+
+      return () => clearTimeout(timer)
+    }
+  }, [showWaveform, showVideoModal])
+
+  // Ensure video plays when modal opens (only if waveform is not showing)
+  useEffect(() => {
+    if (showVideoModal && !showWaveform && modalVideoRef.current) {
       const video = modalVideoRef.current
       video.load() // Reload video to ensure it plays
       video.play().catch(err => {
         console.error('Error playing video:', err)
       })
     }
-  }, [showVideoModal, modalVideoUrl])
+  }, [showVideoModal, showWaveform, modalVideoUrl])
 
   const handleDateClick = (dateItem: DateItem) => {
     // Only allow clicking on valid dates (up to Nov 9th)
@@ -735,6 +934,10 @@ function App() {
     const slider = sliderRef.current
     if (!slider || !containerRef.current) return
 
+    let scrollUpdateTimeout: number
+    let lastCenteredDate: Date | null = null
+    let isUserScrolling = false
+
     const updateDateLineSizes = () => {
       if (!slider || !containerRef.current) return
 
@@ -742,6 +945,9 @@ function App() {
       const sliderCenter = sliderRect.left + sliderRect.width / 2
 
       const dateWrappers = containerRef.current.querySelectorAll('.date-line-wrapper')
+      let closestElement: HTMLElement | null = null
+      let closestDistance = Infinity
+      
       dateWrappers.forEach((wrapper) => {
         const element = wrapper as HTMLElement
         const rect = element.getBoundingClientRect()
@@ -749,6 +955,12 @@ function App() {
         const distance = Math.abs(elementCenter - sliderCenter)
         const maxDistance = sliderRect.width / 2
         const proximity = Math.max(0, 1 - distance / maxDistance)
+        
+        // Track closest element to center (for date selection)
+        if (distance < closestDistance && !element.classList.contains('disabled')) {
+          closestDistance = distance
+          closestElement = element
+        }
         
         // Scale based on proximity (closer to center = bigger)
         const scale = 1 + (proximity * 0.3) // Scale from 1.0 to 1.3
@@ -773,6 +985,32 @@ function App() {
           dateLine.style.opacity = ''
         }
       })
+
+      // Update selected date based on closest element to center (only during user scroll)
+      if (closestElement && isUserScrolling && closestDistance < sliderRect.width * 0.3) {
+        const dateKey = closestElement.getAttribute('data-date-item')
+        if (dateKey) {
+          const date = new Date(parseInt(dateKey))
+          const normalizedDate = normalizeDate(date)
+          
+          // Only update if it's a valid date and different from last centered date
+          if (isDateValid(normalizedDate) && 
+              (!lastCenteredDate || normalizedDate.getTime() !== lastCenteredDate.getTime())) {
+            lastCenteredDate = normalizedDate
+            
+            // Clear existing timeout
+            clearTimeout(scrollUpdateTimeout)
+            
+            // Debounce the date update to avoid too many state changes during scroll
+            scrollUpdateTimeout = window.setTimeout(() => {
+              setSelectedDate(normalizedDate)
+              // Also update the image index
+              const imageIndex = getImageForDate(normalizedDate)
+              setSelectedImageIndex(imageIndex)
+            }, 150) // Small delay to batch updates during rapid scrolling
+          }
+        }
+      }
     }
 
     // Use event delegation to track hover state (works with dynamically rendered elements)
@@ -800,11 +1038,28 @@ function App() {
     }
 
     let animationFrameId: number
+    let scrollStartTimer: number
+    
+    const handleScrollStart = () => {
+      isUserScrolling = true
+      clearTimeout(scrollStartTimer)
+    }
+    
+    const handleScrollEnd = () => {
+      clearTimeout(scrollStartTimer)
+      scrollStartTimer = window.setTimeout(() => {
+        isUserScrolling = false
+        lastCenteredDate = null
+      }, 200)
+    }
+    
     const handleScroll = () => {
+      handleScrollStart()
       if (animationFrameId) {
         cancelAnimationFrame(animationFrameId)
       }
       animationFrameId = requestAnimationFrame(updateDateLineSizes)
+      handleScrollEnd()
     }
 
     slider.addEventListener('scroll', handleScroll, { passive: true })
@@ -819,9 +1074,11 @@ function App() {
       if (animationFrameId) {
         cancelAnimationFrame(animationFrameId)
       }
+      clearTimeout(scrollUpdateTimeout)
+      clearTimeout(scrollStartTimer)
       hoveredElements.current.clear()
     }
-  }, [])
+  }, [isDateValid, sampleImages, normalizeDate, getImageForDate, startDate, cutoffDate])
 
   // Add drag functionality
   useEffect(() => {
@@ -1509,6 +1766,9 @@ function App() {
                     const isValid = isDateValid(dateItem.date)
                     const isScrollingTo = scrollingDate && normalizeDate(scrollingDate).getTime() === normalizeDate(dateItem.date).getTime()
                     const isFirstDate = index === 0
+                    const hasMemoryOnDate = hasMemory(dateItem.date)
+                    // Show line for all valid dates, but highlight ones with memories
+                    const showLine = isValid
                   
                   return (
                     <div
@@ -1518,16 +1778,21 @@ function App() {
                       {isFirstDate && memoryCount > 0 && (
                         <span className="month-memory-count">{memoryCount} {memoryCount === 1 ? 'memory' : 'memories'}</span>
                       )}
-                      <div
-                        data-date-key={`${monthName}-${dateItem.day}`}
-                        data-date-item={`${dateItem.date.getTime()}`}
-                        className={`date-line-wrapper ${isSelected ? 'selected' : ''} ${isCurrentDate ? 'current-date' : ''} ${!isValid ? 'disabled' : ''} ${isScrollingTo ? 'scrolling-to' : ''}`}
-                        onClick={() => handleDateClick(dateItem)}
-                        title={`${monthName} ${dateItem.day}${!isValid ? ' (Not yet available)' : ''}`}
-                        style={{ opacity: isValid ? 1 : 0.3, cursor: isValid ? 'pointer' : 'not-allowed' }}
-                      >
-                        <div className={`date-line ${isSelected ? 'selected' : ''} ${isCurrentDate ? 'current-date' : ''} ${isScrollingTo ? 'scrolling-to' : ''}`}></div>
-                      </div>
+                      {showLine && (
+                        <div
+                          data-date-key={`${monthName}-${dateItem.day}`}
+                          data-date-item={`${dateItem.date.getTime()}`}
+                          className={`date-line-wrapper ${isSelected ? 'selected' : ''} ${isCurrentDate ? 'current-date' : ''} ${!isValid ? 'disabled' : ''} ${isScrollingTo ? 'scrolling-to' : ''} ${hasMemoryOnDate ? 'has-memory' : ''}`}
+                          onClick={() => handleDateClick(dateItem)}
+                          title={`${monthName} ${dateItem.day}${!isValid ? ' (Not yet available)' : hasMemoryOnDate && !sampleImages.some(img => normalizeDate(img.date).getTime() === normalizeDate(dateItem.date).getTime()) ? ' (Memory)' : ''}`}
+                          style={{ 
+                            opacity: isValid ? (hasMemoryOnDate ? 0.8 : 0.4) : 0.2, 
+                            cursor: isValid ? 'pointer' : 'not-allowed' 
+                          }}
+                        >
+                          <div className={`date-line ${isSelected ? 'selected' : ''} ${isCurrentDate ? 'current-date' : ''} ${isScrollingTo ? 'scrolling-to' : ''} ${hasMemoryOnDate ? 'has-memory' : ''}`}></div>
+                        </div>
+                      )}
                     </div>
                   )
                 })}
@@ -1544,29 +1809,45 @@ function App() {
           <div className="video-modal" onClick={(e) => e.stopPropagation()}>
             <button className="video-modal-close" onClick={closeVideoModal}>×</button>
             <div className="video-modal-content">
-              <video
-                ref={modalVideoRef}
-                className="modal-video"
-                autoPlay
-                loop
-                playsInline
-                key={modalVideoUrl}
-                onError={(e) => {
-                  console.error('Video error:', e)
-                  console.error('Failed to load video:', modalVideoUrl)
-                }}
-                onLoadedData={() => {
-                  console.log('Video loaded successfully:', modalVideoUrl)
-                  if (modalVideoRef.current) {
-                    modalVideoRef.current.play().catch(err => {
-                      console.error('Error playing video after load:', err)
-                    })
-                  }
-                }}
-              >
-                <source src={modalVideoUrl} type="video/mp4" />
-                Your browser does not support the video tag.
-              </video>
+              {showWaveform ? (
+                <div className="waveform-container">
+                  <div className="waveform">
+                    {waveformData.map((amplitude, index) => (
+                      <div
+                        key={index}
+                        className="waveform-bar"
+                        style={{
+                          height: `${Math.max(2, amplitude * 100)}%`
+                        }}
+                      />
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <video
+                  ref={modalVideoRef}
+                  className="modal-video"
+                  autoPlay
+                  loop
+                  playsInline
+                  key={modalVideoUrl}
+                  onError={(e) => {
+                    console.error('Video error:', e)
+                    console.error('Failed to load video:', modalVideoUrl)
+                  }}
+                  onLoadedData={() => {
+                    console.log('Video loaded successfully:', modalVideoUrl)
+                    if (modalVideoRef.current) {
+                      modalVideoRef.current.play().catch(err => {
+                        console.error('Error playing video after load:', err)
+                      })
+                    }
+                  }}
+                >
+                  <source src={modalVideoUrl} type="video/mp4" />
+                  Your browser does not support the video tag.
+                </video>
+              )}
               {/* Logo in bottom right */}
               <img src="/logo.png" alt="Memento" className="video-modal-logo" />
             </div>
